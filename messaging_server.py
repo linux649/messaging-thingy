@@ -239,7 +239,10 @@ def get_messages_from_channel(type_channel: CHANNEL_TYPES, id:str, from_time:flo
         return
     #if there is no set from_time, return all messages
     if from_time == 0:
-        return messages.values(), float(list(messages.keys())[-1])
+        try:
+            return messages.values(), float(list(messages.keys())[-1])
+        except IndexError:
+            return {}, 0
 
     latest_time = 0
 
@@ -694,9 +697,10 @@ def encrypted_client_handler(conn: socket.socket, addr):
                     log(f'User {uid} has sent a message to {channel_id} ({channel_type})')
                 case status.JOIN_ROOM:
                     #add the room id if the server has the room
-                    room_id = packet[status.PACKET_DATA][status.DATA_ID]
+                    room_id = packet[status.PACKET_DATA][status.DATA_ID].strip()
                     if room_id not in get_list_channels(status.CHANNEL_TYPE_ROOM) and not get_room_name(room_id): #the room exists if either: it has a file containing its messages, or is registered in the name file
                         functions.send_conn_packet(conn, status.OPERATION_FAILURE, 'No such room!')
+                        continue
                     user = get_from_user_file(uid)
                     user[status.DATA_ROOMS].append(room_id)
                     write_to_user_file(uid, user)
@@ -967,7 +971,11 @@ def gui_update_handler():
         if current_channel.get():
             messages_view.config(state=tkinter.NORMAL)
             channel_type, channel_id = current_channel.get().split(SPACE)
-            messages, last_message_time = get_messages_from_channel(channel_type, channel_id, last_update_time.get())
+            channel_info = get_messages_from_channel(channel_type, channel_id, last_update_time.get())
+            if not channel_info:
+                server_shutdown.wait(UPDATE_TIMEOUT)
+                continue
+            messages, last_message_time = channel_info
             if last_update_time.get() < last_message_time: #if the saved time is less than the time of the latest message, add new messages and save new time
                 for message in messages:
                     messages_view.insert(tkinter.END, f'{message}\n')

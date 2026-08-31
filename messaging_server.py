@@ -37,7 +37,43 @@ JSON_FILE_EXT = '.json'
 #window constants
 TITLE = 'That Messaging Server!'
 GEOMETRY = '800x510'
-SPACE = '\u00a0'
+HELP_MENU = '''
+Hello and thanks for using this program!
+
+Contents:
+1. Configuration file
+2. Moderation
+
+Appendix 1. Glossary
+
+1. Configuration file
+
+Since you have gotten here, you have gotten through configuration hell! (or just auto-generated one lol)
+The configuration requirements are as so:
+ipaddress - a valid IPv4 address or hostname
+tcpport - a valid TCP port that is between 1024 to 65535 and is not 38121 and 38122 and not the same as the TLS TCP port
+tlsport - a valid TCP port that is between 1024 to 65535 and is not 38121 and 38122 and not the same as the TCP port
+networkdiscoveryenabled - a valid boolean (e.g. true, false, 0, 1)
+maxsocketbacklog, maxsecurebacklog, maxsocketconnections, maxsecureconnections - any non-negative integer
+certificate - a path to a file containing a TLS certificate's public key 
+privatekey - a path to a file containing a TLS certificate's private key
+commonname - the common name the certificates are configured with (if this does not match the certificate common name, clients cannot connect)
+
+2. Moderation
+
+As the server operator, you are basically a dictator of how the server operates. 
+You can see all messages sent in any channel, and all users in said channel.
+You can ban or pardon any user as you see fit, as long as you have their UUID (which you can see in the user list).
+You can find these options in options > moderation.
+You can also disconnect all of the people connected to the unencrypted and encrypted sockets.
+You can find these options under options > purge.
+
+Appendix 1. Glossary
+IP(v4) address - an IP address is an address that a computer uses to identify itself in a network. An IPv4 address has a format of xxx.xxx.xxx.xxx
+TCP port - an interface that a computer uses to connect to other computers with the Transmission Control Protocol. There are 65535 of these ports, ranging from 1 to 65535. 
+UUID - A Universally Uniquie IDentifier is a type of ID intended to guarantee uniqueness over time and space (from RFC 9562: https://datatracker.ietf.org/doc/html/rfc9562.html).
+TLS - The form of security that this server uses to communicate with client, transport layer security.
+'''
 
 
 #timeout constants
@@ -146,6 +182,9 @@ def read_config_file():
     except ValueError as e: # datatypes aren't correct, so exit
         log(f'Configuration Error! {e}')
         exit(errno.EPERM)
+    except configparser.InterpolationError as e:
+        log(f'Configuration Interpolation Error! {e}')
+        exit(errno.EBADF)
 
     #Check if configuration is valid, otherwise exit
     if not (functions.is_port_valid(tcp_port) and functions.is_port_valid(tls_port)):
@@ -231,7 +270,7 @@ def get_messages_from_channel(type_channel: CHANNEL_TYPES, id:str, from_time:flo
         with room_message_lock:
             with open(file) as message_file:
                 contents = message_file.read()
-    result = []
+    result = {}
     #parse the json into a dictionary
     try:
         messages = json.loads(contents)
@@ -240,17 +279,17 @@ def get_messages_from_channel(type_channel: CHANNEL_TYPES, id:str, from_time:flo
     #if there is no set from_time, return all messages
     if from_time == 0:
         try:
-            return messages.values(), float(list(messages.keys())[-1])
+            return messages, float(list(messages.keys())[-1])
         except IndexError:
             return {}, 0
 
     latest_time = 0
 
     #cycle through messages, as if they are before from_time or invalid, remove them from returned list
-    for time in messages.keys():
+    for time, message in messages.items():
         try:
             if float(time) > from_time:
-                result.append(messages[time])
+                result.update({time: message})
                 latest_time = float(time)
         except ValueError:
             continue
@@ -260,7 +299,8 @@ def get_messages_from_channel(type_channel: CHANNEL_TYPES, id:str, from_time:flo
 def write_to_message_file(id: str, message: str, type_channel: CHANNEL_TYPES):
     '''Write a messsage to a channel file.
     - file is a path-like string
-    - messsage is the message to save.'''
+    - messsage is the message to save.
+    - type_channel is either 'direct' or 'room'. '''
     #form the file string
     file = SERVER_DIRECT_DIR+id+JSON_FILE_EXT if type_channel == status.CHANNEL_TYPE_DIRECT else SERVER_ROOM_DIR+id+JSON_FILE_EXT
     messages = {} 
@@ -418,13 +458,13 @@ def save_room_name(id:str, name: str):
     if not functions.check_uuid_valid(id):
         return
     with room_name_file_lock:
-        with open(ROOM_NAME_FILE, 'w') as namefile_w:
+        try:
+            with open(ROOM_NAME_FILE) as namefile_r:
+                rooms = json.loads(namefile_r.read())
+        except (FileNotFoundError, json.JSONDecodeError):
+            log('Room name file not found, creating new file...')
             rooms = {}
-            try:
-                with open(ROOM_NAME_FILE) as namefile_r:
-                    rooms = json.loads(namefile_r.read())
-            except (FileNotFoundError, json.JSONDecodeError):
-                rooms = {}
+        with open(ROOM_NAME_FILE, 'w') as namefile_w:
             rooms.update({id:name})
             namefile_w.write(json.dumps(rooms))
 
@@ -549,7 +589,7 @@ def encrypted_client_handler(conn: socket.socket, addr):
             conn.close()
             return
         uid = buffer[0][status.PACKET_DATA][status.DATA_ID]
-    except KeyError:
+    except (KeyError, TypeError):
         log(f'Encrypted peer {addr} sent an invalid join packet.')
         conn.close()
         return
@@ -611,6 +651,9 @@ def encrypted_client_handler(conn: socket.socket, addr):
                     #set the new username from the packet data
                     user_info = get_from_user_file(uid)
                     new_username = packet[status.PACKET_DATA][status.DATA_USERNAME]
+                    #prevent GUI problems from having separator character in username
+                    if status.SPACE in new_username:
+                       new_username.replace(status.SPACE, ' ')
                     user_info.update({status.DATA_USERNAME:new_username})
                     write_to_user_file(uid, user_info)
                     log(f'User {uid} has changed their username to {new_username}')
@@ -679,6 +722,9 @@ def encrypted_client_handler(conn: socket.socket, addr):
                 case status.CREATE_ROOM:
                     #get the room name from the creator and create a room, register the name with the name file, and add to creator's room list
                     new_room_name = packet[status.PACKET_DATA][status.DATA_NAME]
+                    #for V2:
+                    if status.SPACE in new_room_name: #prevent client and server GUI ruptures from room name having a separator character
+                        new_room_name.replace(status.SPACE, ' ')
                     users = read_user_file()
                     new_channel_id = str(uuid.uuid4())
                     user = users[uid]
@@ -966,11 +1012,11 @@ def gui_update_handler():
         channel_select.delete(status.START, tkinter.END)
         for channel_type in (status.CHANNEL_TYPE_DIRECT, status.CHANNEL_TYPE_ROOM):
             for channel_id in get_list_channels(channel_type):
-                channel_select.insert(tkinter.END, channel_type+SPACE+channel_id)
+                channel_select.insert(tkinter.END, channel_type+status.SPACE+channel_id)
         #if current_room is set, add the messages and users into their respective widgets
         if current_channel.get():
             messages_view.config(state=tkinter.NORMAL)
-            channel_type, channel_id = current_channel.get().split(SPACE)
+            channel_type, channel_id = current_channel.get().split(status.SPACE)
             channel_info = get_messages_from_channel(channel_type, channel_id, last_update_time.get())
             if not channel_info:
                 server_shutdown.wait(UPDATE_TIMEOUT)
@@ -993,6 +1039,27 @@ def gui_update_handler():
             user_list.config(state=tkinter.DISABLED)
         server_shutdown.wait(UPDATE_TIMEOUT) #wait for some period of time to 'cooldown' unless server_shutdown is set
     log('GUI update handler thread stopped.')
+
+def on_help_menu_pressed(*event):
+    '''Tkinter event bound to help menu button pressed.
+    - *event is the tkinter event information.'''
+    help_menu = tkinter.Tk()
+    help_menu.title(TITLE)
+    help_menu.geometry(GEOMETRY)
+
+    help_menu.grid_rowconfigure(0, weight=1)
+    help_menu.grid_columnconfigure(0, weight=1)
+
+    main_text = tkinter.Text(help_menu, wrap='word')
+    main_text.insert(tkinter.END, HELP_MENU)
+    main_text.configure(state=tkinter.DISABLED)
+    main_text.grid(row=0, column=0, sticky=tkinter.NSEW)
+
+    scrollbar = tkinter.ttk.Scrollbar(help_menu, orient=tkinter.VERTICAL, command=main_text.yview)
+    main_text['yscrollcommand'] = scrollbar.set
+    scrollbar.grid(row=0, column=1, sticky=tkinter.NS)
+
+    help_menu.mainloop()
 
 
 if __name__ == '__main__':
@@ -1021,6 +1088,8 @@ if __name__ == '__main__':
         socket_thread.start()
     except OSError as e:
         log(f'ERROR! {e} Are you sure you configured the IP Address correctly?')
+        server_shutdown.set()
+        exit(errno.ENOENT)
 
     #create the encrypted socket object and hand it off the the encrypted socket listener thread
     try:
@@ -1028,6 +1097,8 @@ if __name__ == '__main__':
         encrypted_socket.settimeout(SOCKET_RECIEVE_TIMEOUT)
     except OSError as e:
         log(f'ERROR! {e} Are you sure you configured the IP Address correctly?')
+        server_shutdown.set()
+        exit(errno.ENOENT)
 
     #Load TLS certificate and private key for encryption
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -1035,9 +1106,12 @@ if __name__ == '__main__':
         context.load_cert_chain(PUBLIC_CERT_FILE, CERT_PRIVATE_KEY)
     except FileNotFoundError:
         log('ERROR! Could not find certificate files!')
+        server_shutdown.set()
         exit(errno.ENOENT)
     except ssl.SSLError:
-        log('ERROR! The certificates are not in PEM format! Are you sure that the certificates are real?')
+        log('ERROR! The certificates are not in the correct format! Are you sure that the certificates are real?')
+        server_shutdown.set()
+        exit(errno.ENOENT)
 
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(status.CIPHERS) #set ciphers to prevent 'bad' ones
@@ -1053,9 +1127,11 @@ if __name__ == '__main__':
         discovery_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         #bind the socket to the HOST and SERVER_DISCOVERY_PORT
         try:
-            discovery_socket.bind((status.ALL_INTERFACES, status.SERVER_DISCOVERY_PORT))
+            discovery_socket.bind((HOST, status.SERVER_DISCOVERY_PORT))
         except OSError as e:
             log(f'ERROR! {e} Are you sure you configured the IP Address correctly?')
+            server_shutdown.set()
+            exit(errno.ENOENT)
         #Set the SO_REUSEADDR to allow immediate reuse of socket and set timeout for checking thread events
         discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, ENABLE_SOCK_OPTION)
         discovery_socket.settimeout(SOCKET_RECIEVE_TIMEOUT)
@@ -1155,6 +1231,8 @@ if __name__ == '__main__':
     general_menu.add_command(label='Shutdown', command=on_server_shutdown_pressed)
 
     menubar.add_cascade(label=menubar_label, menu=general_menu)
+
+    menubar.add_command(label='Help', command=on_help_menu_pressed)
 
     root.protocol("WM_DELETE_WINDOW", on_server_shutdown_pressed)
     root.config(menu=menubar)

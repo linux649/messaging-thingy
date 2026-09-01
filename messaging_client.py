@@ -385,7 +385,7 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
                         if not can_acquire:
                             continue
                         else:
-                            current_type, current_id = current_room.get().split(status.SPACE)
+                            current_type, current_id = current_room.get().split(status.SPACE, maxsplit=1)
                             if current_type != channel_type or current_id != channel_id:
                                 current_room_lock.release()
                                 continue
@@ -483,10 +483,11 @@ def network_discover_servers():
 
 #tkinter validatecommands
 def message_entry_limit(P):
+    '''Tkinter validation command that makes sure that the length of the message entry contents is not more than 100 characters.'''
     return len(P) < 100
 
 def check_valid_tcp_port(P):
-    '''Tkinter validation commmand that makes sure that that the entered TCP port is valid and a number.'''
+    '''Tkinter validation command that makes sure that the entered TCP port is valid and a number.'''
     if str.isdigit(P):
         return int(P) <= status.MAX_PORT and int(P) >= status.PORT_ONE
     else:
@@ -503,8 +504,9 @@ def on_close():
     root.destroy()
 
 def on_disconnect():
+    '''Sets the close_encrypted_socket thread to signal the encrypted socket thread to close.'''
     close_encrypted_socket.set()
-    cycle_display_mode()
+    back_to_main_menu()
 
 def clear_gui():
     '''This function unrenders all of the GUI components of all of the display layouts.'''
@@ -554,7 +556,7 @@ def on_discover_servers_button_pressed():
     thread = threading.Thread(target=network_discover_servers)
     thread.start()
 
-def on_connect_listbox_select(event):
+def on_connect_listbox_select(*event):
     '''Tkinter event that triggers when an item in the connect menu listbox is selected.'''
     #get the selection and split it up to relevant info
     try:
@@ -663,7 +665,7 @@ def change_to_room(*event):
         selection = room_channel_select.selection_get()
         name, room_id = selection.split(status.SPACE,maxsplit=1)
         room_channel_select.selection_clear(status.START, tkinter.END)
-    except (tkinter.TclError, IndexError):
+    except (tkinter.TclError, IndexError, ValueError):
         return
     if functions.check_uuid_valid(room_id):
         can_acquire = current_room_lock.acquire(blocking=False)
@@ -764,13 +766,13 @@ def on_help_menu_pressed(*event):
     help_menu.mainloop()
 
 def on_copy_user_menu_pressed():
-    '''Tkinter event bound to when the copy > user UUID menu button is pressed'''
+    '''Tkinter event bound to when the copy > user UUID menu button is pressed.'''
     root.clipboard_clear()
     root.clipboard_append(USER_ID)
     tkinter.messagebox.showinfo('Copy', 'Copied user UUID to the clipboard!')
 
 def on_copy_channel_pressed():
-    '''Tkinter event bound to when the copy > channel UUID menu button is pressed'''
+    '''Tkinter event bound to when the copy > channel UUID menu button is pressed.'''
     if current_room.get():
         channel_type, channel_id = current_room.get().split(status.SPACE, maxsplit=1)
         if channel_type:

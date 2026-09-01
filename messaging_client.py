@@ -176,8 +176,8 @@ def read_config_file(config_file: str):
     if os.path.isfile(config_file):
         config.read(config_file)
     else:
-        #if the config file is missing, create so server operator can configure the server
-        write_new_config_file(config_file)
+        #if the config file is missing, create so client can identify
+        write_new_config_file(config_file, default_id)
         
     configured_id = config['Client'].get('ClientID')
     if not functions.check_uuid_valid(configured_id):

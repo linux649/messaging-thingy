@@ -6,6 +6,7 @@ import configparser
 import datetime
 import errno
 import hashlib
+import itertools
 import os
 import queue
 import socket
@@ -34,6 +35,9 @@ MAX_INFO_ATTEMPTS = 3
 DISCOVERY_COOLDOWN = 2
 CERTIFICATE_PUBLIC_EXT = '.crt'
 WEEK_S = 7*24*60*60
+
+MAX_QUEUE_SIZE = 20
+MAX_QUEUE_SEND_HOLD = 10
 
 DISPLAY_MAIN_MENU = 0
 DISPLAY_CONNECT_MENU = 1
@@ -112,13 +116,24 @@ sent_sync = 0
 current_room_lock = threading.RLock()
 update_message_lock = threading.Lock()
 
-socket_send_queue = queue.Queue()
+socket_send_queue = queue.PriorityQueue()
+queue_unique_counter = itertools.count()
+HIGH_PRIORITY_QUEUE = 1
+REFRESH_PRIORITY_QUEUE = 2
+LOW_PRIORITY_QUEUE = 3
 
 close_encrypted_socket = threading.Event()
 enable_live_refresh = threading.Event()
 immediate_refresh = threading.Event()
 
 #functions
+def create_queue_data(priority: int, data):
+    '''Function that creates an object to put in a PriorityQueue.
+    - priority is the priority of the queue object (from lowest to highest)
+    - data is any queue data.'''
+    #an itertools.count() is used so the data isn't compared with >, which would produce an error if non-comparable
+    return (priority, next(queue_unique_counter), data)
+
 def clear_text_info():
     '''Function that clears the contents of both the messages view and user list textboxes.'''
     messages_view.config(state=tkinter.NORMAL)
@@ -315,7 +330,8 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
             while not socket_send_queue.empty():
                 try:
                     #send packets if needed
-                    p_status, p_data = socket_send_queue.get_nowait()
+                    queue_data = socket_send_queue.get_nowait()
+                    p_status, p_data = queue_data[2] #the packet information is stored in index 2 of an expected queue tuple (priority, unique_num, >(packet_status, packet_data)<)
                     functions.send_conn_packet(conn, p_status, p_data)
                 except queue.Empty:
                     break
@@ -398,6 +414,7 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
                                     formatted_time = datetime.datetime.fromtimestamp(float(time)).strftime(MESSAGE_DATE_FORMAT)
                                     messages_view.insert(tkinter.END, f'[{formatted_time}] {message}\n')
                                     root.update()
+                                    messages_view.see(tkinter.END)
                                 messages_view.config(state=tkinter.DISABLED)
                             current_room_lock.release()
                 case status.SERVER_CLOSED_SOCKET:
@@ -634,14 +651,17 @@ def on_connect_button_pressed():
 def on_send_message_event(*event):
     '''Tkinter function that is bound to the send button and pressing Enter/Return in the message entry.
     - *event is the tkinter event information.'''
-    if current_room:
-        with current_room_lock:
+    message = messages_entry.get()
+    if current_room.get() and message: #disregard if the message field is empty
+        last_send_time.set(time.time())
+        can_acquire = current_room_lock.acquire(blocking=False) #try to acquire the lock to get the room id, but let user try again if not lockable
+        if can_acquire: 
             channel_type, channel_id = current_room.get().split(status.SPACE)
-            message = messages_entry.get()
-            print(message)
             queue_data = (status.SEND_MESSAGE, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id, status.DATA_MESSAGE:message})
-            socket_send_queue.put(queue_data)
+            socket_send_queue.put(create_queue_data(LOW_PRIORITY_QUEUE, queue_data))
             messages_entry.delete(status.START, tkinter.END)
+            current_room_lock.release()
+
 
 def change_to_direct(*event):
     '''This function is bound to the tkinter event that activates when an item in the direct message listbox is selected.'''
@@ -665,7 +685,7 @@ def change_to_room(*event):
         selection = room_channel_select.selection_get()
         name, room_id = selection.split(status.SPACE,maxsplit=1)
         room_channel_select.selection_clear(status.START, tkinter.END)
-    except (tkinter.TclError, IndexError, ValueError):
+    except (tkinter.TclError, IndexError):
         return
     if functions.check_uuid_valid(room_id):
         can_acquire = current_room_lock.acquire(blocking=False)
@@ -679,14 +699,14 @@ def refresh_messages():
     '''Event handler that activates at a set interval that sends a message to refresh the messages, user lists, and user info.'''
     while enable_live_refresh.is_set():
         immediate_refresh.clear()
-        socket_send_queue.put((status.GET_USER_INFO, ''))
+        socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_USER_INFO, '')))
         can_acquire = current_room_lock.acquire(blocking=False)
         if can_acquire:
             if current_room.get():
                 channel_type, channel_id = current_room.get().split(status.SPACE)
                 print(channel_type, channel_id)
-                socket_send_queue.put((status.GET_USER_LIST, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id}))
-                socket_send_queue.put((status.GET_MESSAGES, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id, status.DATA_FROM:last_update_time}))
+                socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_USER_LIST, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id})))
+                socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_MESSAGES, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id, status.DATA_FROM:last_update_time})))
             current_room_lock.release()
         immediate_refresh.wait(REFRESH_INTERVAL)
 
@@ -695,35 +715,35 @@ def on_create_room():
     name = tkinter.simpledialog.askstring('New Room', 'Enter a name for the new room: ')
     if not name:
         return
-    socket_send_queue.put((status.CREATE_ROOM, {status.DATA_NAME: name}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.CREATE_ROOM, {status.DATA_NAME: name})))
 
 def on_create_direct():
     '''Tkinter event bound to when the direct option in the create submenu is pressed.'''
     other_uuid = tkinter.simpledialog.askstring('New Direct Message', 'Enter the other user\'s UUID: ')
     if not other_uuid:
         return
-    socket_send_queue.put((status.CREATE_DIRECT, {status.DATA_ID: other_uuid}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.CREATE_DIRECT, {status.DATA_ID: other_uuid})))
 
 def on_join_room():
     '''Tkinter event bound to when the join room option in the menu is pressed.'''
     room_id = tkinter.simpledialog.askstring('Join Room', 'Enter the UUID of the room you want to join:')
     if not room_id:
         return
-    socket_send_queue.put((status.JOIN_ROOM, {status.DATA_ID:room_id}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.JOIN_ROOM, {status.DATA_ID:room_id})))
 
 def on_leave_room():
     '''Tkinter event bound to when the room option in the leave submenu in the menu is pressed.'''
     room_id = tkinter.simpledialog.askstring('Leave Room', 'Enter the UUID of the room you want to leave:')
     if not room_id:
         return
-    socket_send_queue.put((status.LEAVE_CHANNEL, {status.DATA_TYPE:status.CHANNEL_TYPE_ROOM, status.DATA_ID:room_id}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.LEAVE_CHANNEL, {status.DATA_TYPE:status.CHANNEL_TYPE_ROOM, status.DATA_ID:room_id})))
 
 def on_leave_direct():
     '''Tkinter event bound to when the direct option in the leave submenu in the menu is pressed.'''
     direct_id = tkinter.simpledialog.askstring('Leave Direct Message', 'Enter the UUID of the direct message you want to leave:')
     if not direct_id:
         return
-    socket_send_queue.put((status.LEAVE_CHANNEL, {status.DATA_TYPE:status.CHANNEL_TYPE_DIRECT, status.DATA_ID:direct_id}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.LEAVE_CHANNEL, {status.DATA_TYPE:status.CHANNEL_TYPE_DIRECT, status.DATA_ID:direct_id})))
 
 def on_set_username():
     '''Tkinter event bound to when the set username option is selected in the menu.'''
@@ -732,7 +752,7 @@ def on_set_username():
         return
     elif len(username) > status.USERNAME_MAX_LEN:
         username = username[:status.USERNAME_MAX_LEN]
-    socket_send_queue.put((status.SET_USERNAME, {status.DATA_USERNAME:username}))
+    socket_send_queue.put(create_queue_data(HIGH_PRIORITY_QUEUE,(status.SET_USERNAME, {status.DATA_USERNAME:username})))
 
 def on_exit_entered(*event):
     '''Tkinter event bound to when the exit button in the main menu is hovered over.
@@ -800,6 +820,7 @@ if __name__ == '__main__':
 
     current_room = tkinter.StringVar(root)
     display_current = tkinter.StringVar(root)
+    last_send_time = tkinter.DoubleVar(root, value=time.time())
 
     root.grid_rowconfigure(0, weight=1)
     root.grid_columnconfigure(0, weight=1)

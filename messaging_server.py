@@ -37,6 +37,8 @@ JSON_FILE_EXT = '.json'
 #window constants
 TITLE = 'That Messaging Server!'
 GEOMETRY = '800x510'
+MESSAGE_VIEW_INITIAL_TEXT = '''First time?
+Once people connect to your server, you can see the channels and messages by selecting a channel from the listbox on the left!'''
 HELP_MENU = '''
 Hello and thanks for using this program!
 
@@ -79,10 +81,11 @@ TLS - The form of security that this server uses to communicate with client, tra
 #timeout constants
 SOCKET_RECIEVE_TIMEOUT = 10
 EVENT_HANDLER_TIMEOUT = 10
-UPDATE_TIMEOUT = 3
+UPDATE_TIMEOUT = 10
 
 #other constants
 DATETIME_LOG_FORMAT = '%c'
+MESSAGE_DATE_FORMAT = '%d/%m/%Y %H:%M'
 ENABLE_SOCK_OPTION = 1
 
 #types
@@ -985,7 +988,7 @@ def on_pardon_user_menu_pressed():
     '''Tkinter event bound to when the moderation -> pardon user button is pressed.'''
     global connected_user_list
     messagebox_title = 'Pardon User'
-    user_id = tkinter.simpledialog.askstring(messagebox_title, 'Enter the UUID of the user to ban:')
+    user_id = tkinter.simpledialog.askstring(messagebox_title, 'Enter the UUID of the user to pardon:')
     if not user_id:
         return
     elif not functions.check_uuid_valid(user_id):
@@ -1023,8 +1026,12 @@ def gui_update_handler():
                 continue
             messages, last_message_time = channel_info
             if last_update_time.get() < last_message_time: #if the saved time is less than the time of the latest message, add new messages and save new time
-                for message in messages:
-                    messages_view.insert(tkinter.END, f'{message}\n')
+                to_append = ''
+                for time, message in messages.items():
+                    formatted_time = datetime.datetime.fromtimestamp(float(time)).strftime(MESSAGE_DATE_FORMAT)
+                    to_append += f'[{formatted_time}] {message}\n'
+                messages_view.insert(tkinter.END, to_append)
+                messages_view.see(tkinter.END) #scroll down to bottom
                 last_update_time.set(last_message_time)
             messages_view.config(state=tkinter.DISABLED)
             users = get_users_in_channel(channel_type, channel_id)
@@ -1181,14 +1188,19 @@ if __name__ == '__main__':
     messages_frame.grid(row=0, column=1, sticky=tkinter.NSEW)
 
     messages_frame.grid_columnconfigure(0, weight=1)
-    messages_frame.grid_rowconfigure(0, weight=1)
+    messages_frame.grid_rowconfigure(1, weight=1)
 
-    messages_view = tkinter.Text(messages_frame, width=50, height=30, state=tkinter.DISABLED, wrap=tkinter.WORD)
-    messages_view.grid(row=0, column=0, sticky=tkinter.NSEW)
+    messages_view_label = tkinter.Label(messages_frame, textvariable=current_channel)
+    messages_view_label.grid(row=0, column=0)
+
+    messages_view = tkinter.Text(messages_frame, width=50, height=30, wrap=tkinter.WORD)
+    messages_view.insert(tkinter.END, MESSAGE_VIEW_INITIAL_TEXT)
+    messages_view.configure(state=tkinter.DISABLED)
+    messages_view.grid(row=1, column=0, sticky=tkinter.NSEW)
 
     messages_view_scrollbar = tkinter.ttk.Scrollbar(messages_frame, orient=tkinter.VERTICAL, command=messages_view.yview)
     messages_view['yscrollcommand'] = messages_view_scrollbar.set
-    messages_view_scrollbar.grid(row=0, column=1, sticky=tkinter.NS)
+    messages_view_scrollbar.grid(row=1, column=1, sticky=tkinter.NS)
 
     user_list_frame = tkinter.Frame(main_layout)
     user_list_frame.grid(row=0, column=2, sticky=tkinter.NSEW)
@@ -1237,7 +1249,7 @@ if __name__ == '__main__':
     root.protocol("WM_DELETE_WINDOW", on_server_shutdown_pressed)
     root.config(menu=menubar)
 
-    update_thread = threading.Thread(target=gui_update_handler)
+    update_thread = threading.Thread(target=gui_update_handler, daemon=True)
     update_thread.start()
 
     root.mainloop()

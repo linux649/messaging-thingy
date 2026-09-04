@@ -181,7 +181,7 @@ def write_new_config_file(config_file: str, id:str):
 
 def read_config_file(config_file: str):
     '''Reads out the configuration file to configure the client operation.
-    config_file should be a path like string'''
+    - config_file should be a path like string'''
     config = configparser.ConfigParser()
     # set up default values in case of fallback needed due to no config file
     default_id = uuid.uuid4()
@@ -193,8 +193,11 @@ def read_config_file(config_file: str):
     else:
         #if the config file is missing, create so client can identify
         write_new_config_file(config_file, default_id)
-        
-    configured_id = config['Client'].get('ClientID')
+    try:
+        configured_id = config['Client'].get('ClientID')
+    except configparser.InterpolationError as e:
+            tkinter.messagebox.showerror(f'Configuration Interpolation Error! {e} You may have used a % symbol without it being interpolated to another value!')
+            exit(errno.EBADF)
     if not functions.check_uuid_valid(configured_id):
         tkinter.messagebox.showwarning('Configuration', 'The saved UUID is not valid. A new UUID will be generated.')
         write_new_config_file(config_file, default_id)
@@ -212,7 +215,9 @@ def get_certificate_list():
     return result
 
 def get_certificate(common_name):
-    '''Reads the contents of a certificate file.'''
+    '''Reads the contents of a certificate file.
+    - common_name is the common name of the certificate to get
+    The certificate to get should be saved in the client certificate folder as the <cert_common_name>.crt'''
     if common_name not in get_certificate_list():
         return
     #return if there is an issue reading the file (FileNotFoundError, PermissionError has a base class of OSError)
@@ -224,7 +229,9 @@ def get_certificate(common_name):
         return
 
 def save_certificate(common_name, cert_contents):
-    '''Saves a certificate to the client certificate directory.'''
+    '''Saves a certificate to the client certificate directory.
+    - common_name is the common name as given by the server.
+    - cert_contents is the contents of the TLS certificate to be saved to a file.'''
     with open(CLIENT_CERT_DIR+common_name+CERTIFICATE_PUBLIC_EXT, 'w') as certfile:
         certfile.write(cert_contents)
 
@@ -286,7 +293,7 @@ def prepare_encrypted_connection(host, tcp_port):
         #gracefully close the socket after an attempt
         functions.send_conn_packet(sock, status.CLOSE_SOCKET)
         sock.close()
-    #check that the data is there and valid
+    #check that the data is there and valid, otherwise None
     data = (certificate, common_name, tls_port)
     if all(data):
         return data
@@ -319,7 +326,7 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
         tkinter.messagebox.showerror(messagebox_title, messagebox_contents)
         cycle_display_mode()
         return
-
+    #start the gui update thread
     enable_live_refresh.set()
     update_thread = threading.Thread(target=refresh_messages)
     update_thread.start()
@@ -396,14 +403,17 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
                         last_message_time = float(packet[status.PACKET_DATA][status.DATA_FROM])
                         channel_type = packet[status.PACKET_DATA][status.DATA_TYPE]
                         channel_id = packet[status.PACKET_DATA][status.DATA_ID]
-                        print(last_message_time, last_update_time)
+
                         can_acquire = current_room_lock.acquire(False)
-                        if not can_acquire:
+                        if not can_acquire: #skip if the lock cannot be acquired
                             continue
                         else:
-                            current_type, current_id = current_room.get().split(status.SPACE, maxsplit=1)
-                            if current_type != channel_type or current_id != channel_id:
-                                current_room_lock.release()
+                            try: #ValueError sometimes occurs when there is an external selection that isn't in the listbox but somewhere else in the gui.
+                                current_type, current_id = current_room.get().split(status.SPACE, maxsplit=1)
+                                if current_type != channel_type or current_id != channel_id:
+                                    current_room_lock.release()
+                                    continue
+                            except ValueError:
                                 continue
                             
                             if last_message_time > last_update_time: #if it is greater than the client saved last_update_time, update and display
@@ -414,7 +424,7 @@ def encrypted_socket_handler(conn:ssl.SSLSocket, id:uuid.UUID):
                                     formatted_time = datetime.datetime.fromtimestamp(float(time)).strftime(MESSAGE_DATE_FORMAT)
                                     messages_view.insert(tkinter.END, f'[{formatted_time}] {message}\n')
                                     root.update()
-                                    messages_view.see(tkinter.END)
+                                messages_view.see(tkinter.END)
                                 messages_view.config(state=tkinter.DISABLED)
                             current_room_lock.release()
                 case status.SERVER_CLOSED_SOCKET:
@@ -540,7 +550,7 @@ def back_to_main_menu():
     main_menu.grid_columnconfigure(2, weight=1)
     main_menu.grid_rowconfigure(1, weight=1)
     main_menu.grid_rowconfigure(3, weight=1)
-    menubar.entryconfig(menubar_label, state=tkinter.DISABLED)
+    menubar.entryconfig(MENUBAR_LABEL, state=tkinter.DISABLED)
     current_room.set('')
     display_mode = DISPLAY_MAIN_MENU #need to unset enable live refresh in v2
 
@@ -549,6 +559,7 @@ def cycle_display_mode():
     global display_mode
     clear_gui()
     # Cycle: Main Menu --> Connect Menu --> Connected Layout/Messaging Client --> Repeat
+    # The cycling should reconfigure the grid weight configurations, as they are cleared when grid_forget.
     if display_mode == DISPLAY_MAIN_MENU:
         connect_menu.grid(row=0, column=0, sticky=tkinter.NSEW)
         connect_menu.grid_columnconfigure(1, weight=1)
@@ -561,7 +572,7 @@ def cycle_display_mode():
         connected_layout.grid_columnconfigure(0, weight=1)
         connected_layout.grid_columnconfigure(1, weight=1)
         connected_layout.grid_columnconfigure(2, weight=1)
-        menubar.entryconfig(menubar_label, state=tkinter.NORMAL)
+        menubar.entryconfig(MENUBAR_LABEL, state=tkinter.NORMAL)
         messages_view.delete(TEXT_START, tkinter.END)
         user_list.delete(TEXT_START, tkinter.END)
         display_mode = DISPLAY_CONNECTED
@@ -701,10 +712,9 @@ def refresh_messages():
         immediate_refresh.clear()
         socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_USER_INFO, '')))
         can_acquire = current_room_lock.acquire(blocking=False)
-        if can_acquire:
-            if current_room.get():
+        if can_acquire: 
+            if current_room.get(): #if the user has selected a room to be in
                 channel_type, channel_id = current_room.get().split(status.SPACE)
-                print(channel_type, channel_id)
                 socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_USER_LIST, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id})))
                 socket_send_queue.put(create_queue_data(REFRESH_PRIORITY_QUEUE, (status.GET_MESSAGES, {status.DATA_TYPE:channel_type, status.DATA_ID:channel_id, status.DATA_FROM:last_update_time})))
             current_room_lock.release()
@@ -764,9 +774,17 @@ def on_exit_leave(*event):
     - *event is the tkinter event information.'''
     menu_exit_button.configure(bg=CSS_LIGHTRED)
 
+def on_help_menu_left(*event):
+    '''Tkinter event bound to help menu closed, re-enables help menu button.'''
+    menubar.entryconfig(HELP_LABEL, state=tkinter.NORMAL)
+    help_menu.destroy()
+    
+
 def on_help_menu_pressed(*event):
     '''Tkinter event bound to help menu button pressed.
     - *event is the tkinter event information.'''
+    global help_menu
+    menubar.entryconfigure(HELP_LABEL, state=tkinter.DISABLED)
     help_menu = tkinter.Tk()
     help_menu.title(TITLE)
     help_menu.geometry(GEOMETRY)
@@ -782,6 +800,8 @@ def on_help_menu_pressed(*event):
     scrollbar = tkinter.ttk.Scrollbar(help_menu, orient=tkinter.VERTICAL, command=main_text.yview)
     main_text['yscrollcommand'] = scrollbar.set
     scrollbar.grid(row=0, column=1, sticky=tkinter.NS)
+
+    help_menu.protocol("WM_DELETE_WINDOW", on_help_menu_left)
 
     help_menu.mainloop()
 
@@ -983,7 +1003,8 @@ if __name__ == '__main__':
     user_list_scrollbar.grid(row=1, column=1, sticky=tkinter.NS)
 
     menubar = tkinter.Menu(connected_layout)
-    menubar_label = 'Options'
+    MENUBAR_LABEL = 'Options'
+    HELP_LABEL = 'Help'
 
     general_menu = tkinter.Menu(menubar, tearoff=tkinter.FALSE)
     copy_menu = tkinter.Menu(menubar, tearoff=tkinter.FALSE)
@@ -1007,16 +1028,16 @@ if __name__ == '__main__':
 
     general_menu.add_command(label='Disconnect', command=on_disconnect)
 
-    menubar.add_cascade(label=menubar_label, menu=general_menu)
+    menubar.add_cascade(label=MENUBAR_LABEL, menu=general_menu)
 
     copy_menu.add_command(label='User UUID', command=on_copy_user_menu_pressed)
     copy_menu.add_command(label='Channel UUID', command=on_copy_channel_pressed)
 
     menubar.add_cascade(label='Copy', menu=copy_menu)
 
-    menubar.add_command(label='Help', command=on_help_menu_pressed)
+    menubar.add_command(label=HELP_LABEL, command=on_help_menu_pressed)
 
-    menubar.entryconfig(menubar_label, state=tkinter.DISABLED)
+    menubar.entryconfig(MENUBAR_LABEL, state=tkinter.DISABLED)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.config(menu=menubar)

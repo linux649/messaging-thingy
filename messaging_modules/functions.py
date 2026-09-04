@@ -77,7 +77,8 @@ def send_conn_packet(conn: socket.socket, status_code: int, data='', addr:tuple=
     '''Sends a serialised packet to the connected peer.
     - conn is a open socket object.
     - status is a network status as an int.
-    - data is a JSON serialisable datatype'''
+    - data is a JSON serialisable datatype
+    - addr is a tuple containing the address info (host,port) of the peer to send the packet to.'''
     #Serialise, add terminating character, and encode to send.
     packet = {status.PACKET_STATUS:status_code, status.PACKET_DATA:data}
     packet_json = json.dumps(packet) + status.END_PACKET

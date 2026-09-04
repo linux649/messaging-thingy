@@ -314,7 +314,7 @@ def write_to_message_file(id: str, message: str, type_channel: CHANNEL_TYPES):
                     messages = json.loads(message_file.read())
             except json.JSONDecodeError:
                 messages = {}
-    messages.update({time.time():message})
+            messages.update({time.time():message})
     with open(file, 'w') as message_file:
         message_file.write(json.dumps(messages))
 

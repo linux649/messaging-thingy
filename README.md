@@ -5,8 +5,8 @@ Tk/Tcl for Python 3.14
 ```
 main
 |_ messaging_modules
-  |_ status.py
-  |_ functions.py
+|  |_ status.py
+|  |_ functions.py
 |_ messaging_server.py
 |_ messaging_client.py
 |_ test_server.crt

@@ -11,7 +11,6 @@ import json
 import os
 import socket
 import ssl
-import sys
 import threading
 import time
 import tkinter
@@ -314,7 +313,7 @@ def write_to_message_file(id: str, message: str, type_channel: CHANNEL_TYPES):
                     messages = json.loads(message_file.read())
             except json.JSONDecodeError:
                 messages = {}
-            messages.update({time.time():message})
+    messages.update({time.time():message})
     with open(file, 'w') as message_file:
         message_file.write(json.dumps(messages))
 
@@ -769,6 +768,7 @@ def encrypted_client_handler(conn: socket.socket, addr):
                             continue
                     except ValueError:
                         functions.send_conn_packet(conn, status.OPERATION_FAILURE, 'No such channel!')
+                        continue
                     write_to_user_file(uid, user)
                     functions.send_conn_packet(conn, status.OPERATION_SUCCESS)
                 case status.GET_MESSAGES:

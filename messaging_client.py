@@ -676,11 +676,11 @@ def on_send_message_event(*event):
 
 def change_to_direct(*event):
     '''This function is bound to the tkinter event that activates when an item in the direct message listbox is selected.'''
-    try: #_tkinter.TclError is raised when the client hasn't yet recieved the info from the server yet
+    try: #_tkinter.TclError and or ValueError is raised when the client hasn't yet recieved the info from the server yet
         selection = direct_channel_select.selection_get()
         name, direct_id = selection.split(status.SPACE, maxsplit=1)
         direct_channel_select.selection_clear(status.START, tkinter.END)
-    except (tkinter.TclError, IndexError):
+    except (tkinter.TclError, IndexError, ValueError):
         return
     if functions.check_uuid_valid(direct_id):
         can_acquire = current_room_lock.acquire(blocking=False)
@@ -692,11 +692,11 @@ def change_to_direct(*event):
 
 def change_to_room(*event):
     '''This function is bound to the tkinter event that activates when an item in the room listbox is selected.'''
-    try:#_tkinter.TclError is raised when the client hasn't yet recieved the info from the server yet
+    try:#_tkinter.TclError and or is raised when the client hasn't yet recieved the info from the server yet
         selection = room_channel_select.selection_get()
         name, room_id = selection.split(status.SPACE,maxsplit=1)
         room_channel_select.selection_clear(status.START, tkinter.END)
-    except (tkinter.TclError, IndexError):
+    except (tkinter.TclError, IndexError, ValueError):
         return
     if functions.check_uuid_valid(room_id):
         can_acquire = current_room_lock.acquire(blocking=False)
@@ -1042,15 +1042,4 @@ if __name__ == '__main__':
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.config(menu=menubar)
 
-    #for widget in root.winfo_children():
-    #    if widget.winfo_children():
-    #        if 'bg' in widget.configure():
-    #            widget.configure(bg='blue')
-    #    if 'bg' in widget.configure():
-    #        widget.configure(bg='blue')
-        
-    #root.configure(bg='blue')
-    #main_menu.configure(bg='blue')
-    #connect_menu.configure(bg='blue')
-    #connected_layout.configure(bg='blue')
     root.mainloop()

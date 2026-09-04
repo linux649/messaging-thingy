@@ -22,5 +22,5 @@ The `messaging_server.py` program should be started first, with the `test_server
 The server program will create any other missing folders and files. The configured common name in `server_config.ini` should be `test_server` as that is the common name the certificate has been generated with.
 Visit https://docs.python.org/3/library/ssl.html#self-signed-certificates if you want to generate a self-signed certificate.
 
-The `messaging_client.py` program then can be run and you can connect to the server with it (e.g. IP: 127.0.0.1, TCP: 38119 from default configuration).
+The `messaging_client.py` program then can be run and you can connect to the server with it (e.g. IP: `127.0.0.1`, TCP: `38119` from default configuration).
 The client program will create any missing folders and configuration file if needed.
